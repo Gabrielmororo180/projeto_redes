@@ -2,11 +2,12 @@ import base64
 import socket
 from pathlib import Path
 import hashlib
+from uuid import uuid4
 
 SERVER_IP = "0.0.0.0"
 SERVER_PORT = 12000
 FILES_DIR = Path(__file__).parent / "files"
-
+CHUNK_SIZE = 900
 
 def safe_resolve(filename: str) -> Path | None:
     
@@ -24,6 +25,21 @@ def sha256_file(path: Path) -> str:
                 break
             h.update(b)
     return h.hexdigest()
+
+
+def send_file(sock: socket.socket, client_addr, file_path: Path):
+    transfer_id = uuid4().hex[:8]
+    file_size = file_path.stat().st_size
+    #calcula total de segmentos necessarios para o envio
+    total_chunks = (file_size + CHUNK_SIZE - 1) // CHUNK_SIZE
+    #Calcula o hash do arquivo para verificar integridade
+    file_hash = sha256_file(file_path)
+
+    ok_msg = f"OK|{transfer_id}|{file_size}|{CHUNK_SIZE}|{total_chunks}|{file_hash}"
+    sock.sendto(ok_msg.encode(), client_addr)
+
+    sock.sendto(f"END|{transfer_id}".encode(), client_addr)
+    print(f"[OK] Transferência concluída: {file_path.name} -> {client_addr}")
 
 
 def main():
@@ -55,8 +71,9 @@ def main():
 
         file_size = file_path.stat().st_size
         file_hash = sha256_file(file_path)
-        sock.sendto(f"OK|{filename}|{file_size}|{file_hash}".encode(), client_addr)
-        print(f"[OK] GET aceito para {filename} ({file_size} bytes)")
+        
+        send_file(sock, client_addr, file_path)
+
 
         
 
