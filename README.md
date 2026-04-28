@@ -19,6 +19,6 @@ Implementado o servidor UDP básico que responde a requisições `GET /<arquivo>
 - Cliente → Servidor: `GET /nome_arquivo`
 - Servidor → Cliente:
   - `OK|transfer_id|file_size|chunk_size|total_chunks|sha256`
-  - `DATA|...` (ainda não enviado nesta versão simplificada)
+  - `DATA|...`
   - `END|transfer_id`
   - `ERR|mensagem` (erros: requisição inválida, arquivo inválido, não encontrado)

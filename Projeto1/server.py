@@ -30,17 +30,29 @@ def sha256_file(path: Path) -> str:
 def send_file(sock: socket.socket, client_addr, file_path: Path):
     transfer_id = uuid4().hex[:8]
     file_size = file_path.stat().st_size
-    #calcula total de segmentos necessarios para o envio
+    # calcula total de segmentos necessarios para o envio
     total_chunks = (file_size + CHUNK_SIZE - 1) // CHUNK_SIZE
-    #Calcula o hash do arquivo para verificar integridade
+    # Calcula o hash do arquivo para verificar integridade
     file_hash = sha256_file(file_path)
 
+    # Envia OK primeiro
     ok_msg = f"OK|{transfer_id}|{file_size}|{CHUNK_SIZE}|{total_chunks}|{file_hash}"
     sock.sendto(ok_msg.encode(), client_addr)
 
+    # Depois envia os DATA
+    with open(file_path, "rb") as f:
+        seq = 0
+        while True:
+            chunk = f.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            payload_b64 = base64.b64encode(chunk).decode()
+            data_msg = f"DATA|{transfer_id}|{seq}|{total_chunks}|{payload_b64}"
+            sock.sendto(data_msg.encode(), client_addr)
+            seq += 1
+
     sock.sendto(f"END|{transfer_id}".encode(), client_addr)
     print(f"[OK] Transferência concluída: {file_path.name} -> {client_addr}")
-
 
 def main():
     FILES_DIR.mkdir(exist_ok=True)
