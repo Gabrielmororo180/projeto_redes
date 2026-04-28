@@ -1,14 +1,31 @@
+import base64   
 import socket
+from pathlib import Path
 
-HOST = "0.0.0.0"
-PORT = 12000
+SERVER_IP = "0.0.0.0"
+SERVER_PORT = 12000
+FILES_DIR = Path(__file__).parent / "files"
 
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind((HOST, PORT))
 
-print(f"Servidor UDP ouvindo em {HOST}:{PORT}")
+def main():
+    FILES_DIR.mkdir(exist_ok=True)
 
-while True:
-    data, addr = sock.recvfrom(1024)
-    print(f"Recebido de {addr}: {data.decode(errors='ignore')}")
-    sock.sendto(b"ACK", addr)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((SERVER_IP, SERVER_PORT))
+    print(f"Servidor UDP em {SERVER_IP}:{SERVER_PORT}")
+    print(f"Diretório de arquivos: {FILES_DIR}")
+
+    while True:
+        data, client_addr = sock.recvfrom(65535)
+        msg = data.decode(errors="ignore").strip()
+        print(f"[REQ] {client_addr} -> {msg}")
+
+        if not msg.startswith("GET /"):
+            sock.sendto(b"ERR|requisicao_invalida", client_addr)
+            continue
+
+        
+
+
+if __name__ == "__main__":
+    main()
