@@ -1,6 +1,7 @@
 import base64   
 import socket
 from pathlib import Path
+import hashlib
 
 SERVER_IP = "0.0.0.0"
 SERVER_PORT = 12000
@@ -13,6 +14,16 @@ def safe_resolve(filename: str) -> Path | None:
     if not str(candidate).startswith(str(FILES_DIR.resolve())):
         return None
     return candidate
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(64 * 1024)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()
 
 
 def main():
@@ -43,7 +54,8 @@ def main():
             continue
 
         file_size = file_path.stat().st_size
-        sock.sendto(f"OK|{filename}|{file_size}".encode(), client_addr)
+        file_hash = sha256_file(file_path)
+        sock.sendto(f"OK|{filename}|{file_size}|{file_hash}".encode(), client_addr)
         print(f"[OK] GET aceito para {filename} ({file_size} bytes)")
 
         

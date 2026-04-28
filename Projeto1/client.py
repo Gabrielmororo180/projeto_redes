@@ -1,9 +1,9 @@
 import socket
 import sys
 
-SERVER_IP = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
-SERVER_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 12000
-FILENAME = sys.argv[3] if len(sys.argv) > 3 else "arquivo.txt"
+SERVER_IP = "127.0.0.1"
+SERVER_PORT = 12000
+FILENAME = "arquivo.txt"
 
 req = f"GET /{FILENAME}"
 
