@@ -14,7 +14,7 @@ RETRANS_TIMEOUT = 0.5
 RETRANS_WINDOW = 10.0
 
 
-def safe_resolve(filename: str) -> Path | None:
+def safe_resolve(filename: str) -> Path :
     candidate = (FILES_DIR / filename).resolve()
     if not str(candidate).startswith(str(FILES_DIR.resolve())):
         return None
@@ -32,13 +32,13 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def send_data(sock: socket.socket, client_addr, transfer_id: str, seq: int, total_chunks: int, chunk: bytes) -> None:
+def send_data(sock: socket.socket, client_addr, transfer_id: str, seq: int, total_chunks: int, chunk: bytes) :
     payload_b64 = base64.b64encode(chunk).decode()
     data_msg = f"DATA|{transfer_id}|{seq}|{total_chunks}|{payload_b64}"
     sock.sendto(data_msg.encode(), client_addr)
 
 
-def send_end(sock: socket.socket, client_addr, transfer_id: str) -> None:
+def send_end(sock: socket.socket, client_addr, transfer_id: str) :
     sock.sendto(f"END|{transfer_id}".encode(), client_addr)
 
 
@@ -67,7 +67,7 @@ def send_file(sock: socket.socket, client_addr, file_path: Path):
     return transfer_id, total_chunks, chunks
 
 
-def handle_nack(sock: socket.socket, client_addr, transfer_id: str, total_chunks: int, chunks: dict[int, bytes]) -> None:
+def handle_nack(sock: socket.socket, client_addr, transfer_id: str, total_chunks: int, chunks: dict[int, bytes]):
     previous_timeout = sock.gettimeout()
     sock.settimeout(RETRANS_TIMEOUT)
 

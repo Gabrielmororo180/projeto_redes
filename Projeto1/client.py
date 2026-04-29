@@ -43,7 +43,7 @@ def recv_initial_response(sock: socket.socket) -> tuple[str, int, int, str]:
     return transfer_id, int(total_chunks), int(file_size), expected_sha256
 
 
-def save_file(path: Path, chunks: dict[int, bytes], total_chunks: int) -> None:
+def save_file(path: Path, chunks: dict[int, bytes], total_chunks: int):
     with open(path, "wb") as f:
         for i in range(total_chunks):
             if i not in chunks:
