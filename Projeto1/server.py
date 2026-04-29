@@ -2,6 +2,7 @@ import base64
 import hashlib
 import socket
 import time
+import zlib
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,14 +15,14 @@ RETRANS_TIMEOUT = 0.5
 RETRANS_WINDOW = 10.0
 
 
-def safe_resolve(filename: str) -> Path :
+def safe_resolve(filename):
     candidate = (FILES_DIR / filename).resolve()
     if not str(candidate).startswith(str(FILES_DIR.resolve())):
         return None
     return candidate
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
         while True:
@@ -32,17 +33,22 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def send_data(sock: socket.socket, client_addr, transfer_id: str, seq: int, total_chunks: int, chunk: bytes) :
+def crc32_hex(data):
+    return f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
+
+
+def send_data(sock, client_addr, transfer_id, seq, total_chunks, chunk):
     payload_b64 = base64.b64encode(chunk).decode()
-    data_msg = f"DATA|{transfer_id}|{seq}|{total_chunks}|{payload_b64}"
+    chunk_crc32 = crc32_hex(chunk)
+    data_msg = f"DATA|{transfer_id}|{seq}|{total_chunks}|{chunk_crc32}|{payload_b64}"
     sock.sendto(data_msg.encode(), client_addr)
 
 
-def send_end(sock: socket.socket, client_addr, transfer_id: str) :
+def send_end(sock, client_addr, transfer_id):
     sock.sendto(f"END|{transfer_id}".encode(), client_addr)
 
 
-def send_file(sock: socket.socket, client_addr, file_path: Path):
+def send_file(sock, client_addr, file_path):
     transfer_id = uuid4().hex[:8]
     file_size = file_path.stat().st_size
     total_chunks = (file_size + CHUNK_SIZE - 1) // CHUNK_SIZE
@@ -51,7 +57,7 @@ def send_file(sock: socket.socket, client_addr, file_path: Path):
     ok_msg = f"OK|{transfer_id}|{file_size}|{CHUNK_SIZE}|{total_chunks}|{file_hash}"
     sock.sendto(ok_msg.encode(), client_addr)
 
-    chunks: dict[int, bytes] = {}
+    chunks = {}
     with open(file_path, "rb") as f:
         seq = 0
         while True:
@@ -67,10 +73,9 @@ def send_file(sock: socket.socket, client_addr, file_path: Path):
     return transfer_id, total_chunks, chunks
 
 
-def handle_nack(sock: socket.socket, client_addr, transfer_id: str, total_chunks: int, chunks: dict[int, bytes]):
+def handle_nack(sock, client_addr, transfer_id, total_chunks, chunks):
     previous_timeout = sock.gettimeout()
     sock.settimeout(RETRANS_TIMEOUT)
-
     deadline = time.time() + RETRANS_WINDOW
 
     try:
@@ -95,7 +100,7 @@ def handle_nack(sock: socket.socket, client_addr, transfer_id: str, total_chunks
             if tid != transfer_id:
                 continue
 
-            requested: list[int] = []
+            requested = []
             for s in seq_list.split(","):
                 if s.isdigit():
                     seq = int(s)

@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import socket
+import zlib
 from pathlib import Path
 
 SERVER_IP = "127.0.0.1"
@@ -11,13 +12,13 @@ MAX_ROUNDS = 30
 NACK_BATCH = 200
 
 
-def parse_drop_once(raw: str) -> set[int]:
+def parse_drop_once(raw):
     if not raw.strip():
         return set()
     return {int(s) for s in raw.split(",") if s.strip().isdigit()}
 
 
-def recv_initial_response(sock: socket.socket) -> tuple[str, int, int, str]:
+def recv_initial_response(sock):
     try:
         msg, _ = sock.recvfrom(65535)
     except socket.timeout:
@@ -40,10 +41,10 @@ def recv_initial_response(sock: socket.socket) -> tuple[str, int, int, str]:
         raise SystemExit(1)
 
     _, transfer_id, file_size, chunk_size, total_chunks, expected_sha256 = parts
-    return transfer_id, int(total_chunks), int(file_size), expected_sha256
+    return transfer_id, int(total_chunks), int(file_size), int(chunk_size), expected_sha256
 
 
-def save_file(path: Path, chunks: dict[int, bytes], total_chunks: int):
+def save_file(path, chunks, total_chunks):
     with open(path, "wb") as f:
         for i in range(total_chunks):
             if i not in chunks:
@@ -52,7 +53,7 @@ def save_file(path: Path, chunks: dict[int, bytes], total_chunks: int):
             f.write(chunks[i])
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
         while True:
@@ -61,6 +62,10 @@ def sha256_file(path: Path) -> str:
                 break
             h.update(b)
     return h.hexdigest()
+
+
+def crc32_hex(data):
+    return f"{zlib.crc32(data) & 0xFFFFFFFF:08x}"
 
 
 def main():
@@ -76,10 +81,13 @@ def main():
     req = f"GET /{filename}"
     sock.sendto(req.encode(), (SERVER_IP, SERVER_PORT))
 
-    transfer_id, total_chunks, file_size, expected_sha256 = recv_initial_response(sock)
-    print(f"OK transfer_id={transfer_id} size={file_size} chunks={total_chunks}")
+    transfer_id, total_chunks, file_size, chunk_size, expected_sha256 = recv_initial_response(sock)
+    print(
+        f"OK transfer_id={transfer_id} size={file_size} "
+        f"chunk_size={chunk_size} chunks={total_chunks}"
+    )
 
-    chunks: dict[int, bytes] = {}
+    chunks = {}
     rounds = 0
 
     while rounds < MAX_ROUNDS and len(chunks) < total_chunks:
@@ -103,11 +111,11 @@ def main():
             if not s.startswith("DATA|"):
                 continue
 
-            parts = s.split("|", 4)
-            if len(parts) != 5:
+            parts = s.split("|", 5)
+            if len(parts) != 6:
                 continue
 
-            _, tid, seq_txt, _, payload_b64 = parts
+            _, tid, seq_txt, _, recv_crc32, payload_b64 = parts
             if tid != transfer_id or not seq_txt.isdigit():
                 continue
 
@@ -121,6 +129,15 @@ def main():
             try:
                 chunk = base64.b64decode(payload_b64.encode(), validate=True)
             except Exception:
+                print(f"Payload inválido no seq {seq}")
+                continue
+
+            calc_crc32 = crc32_hex(chunk)
+            if calc_crc32 != recv_crc32.lower():
+                print(
+                    f"CRC inválido no seq {seq}: "
+                    f"esperado={recv_crc32.lower()} calculado={calc_crc32}"
+                )
                 continue
 
             if seq not in chunks:
@@ -157,7 +174,7 @@ def main():
     print("Arquivo salvo em:", out_path)
     print("SHA256 esperado :", expected_sha256)
     print("SHA256 recebido :", got)
-    print("Integridade:", got == expected_sha256)
+    print("Integridade final:", got == expected_sha256)
 
 
 if __name__ == "__main__":
