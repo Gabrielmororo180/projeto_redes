@@ -10,7 +10,7 @@ SERVER_IP = "127.0.0.1"
 SERVER_PORT = 12000
 
 RECV_TIMEOUT = 0.5
-MAX_ROUNDS = 30
+MAX_ROUNDS = 100
 NACK_BATCH = 200
 
 
@@ -163,7 +163,7 @@ def main():
 
     output_dir = Path(__file__).parent / "downloads"
     output_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     name, ext = Path(filename).stem, Path(filename).suffix
     output_path = output_dir / f"{name}_{timestamp}{ext}"
 
