@@ -1,10 +1,10 @@
+# client.py
 import base64
 import hashlib
 import socket
-from time import sleep
 import zlib
-from datetime import datetime
 from pathlib import Path
+from time import sleep
 
 SERVER_IP = "127.0.0.1"
 SERVER_PORT = 12000
@@ -20,9 +20,24 @@ def parse_drop_once(raw):
     return {int(s) for s in raw.split(",") if s.strip().isdigit()}
 
 
+def recv_packet(sock):
+    try:
+        return sock.recvfrom(65535)
+    except socket.timeout:
+        raise
+    except ConnectionResetError:
+        print("Erro: servidor interrompeu a comunicação durante a transferência.")
+        raise SystemExit(1)
+    except OSError as e:
+        if getattr(e, "winerror", None) == 10054:
+            print("Erro: conexão UDP reiniciada pelo host remoto.")
+            raise SystemExit(1)
+        raise
+
+
 def recv_initial_response(sock):
     try:
-        msg, _ = sock.recvfrom(65535)
+        msg, _ = recv_packet(sock)
     except socket.timeout:
         print("Servidor não respondeu.")
         raise SystemExit(1)
@@ -98,7 +113,7 @@ def main():
 
         while True:
             try:
-                pkt, _ = sock.recvfrom(65535)
+                pkt, _ = recv_packet(sock)
             except socket.timeout:
                 break
 
@@ -153,30 +168,29 @@ def main():
         batch = missing[:NACK_BATCH]
         nack_msg = f"NACK|{transfer_id}|{','.join(map(str, batch))}"
         sock.sendto(nack_msg.encode(), (SERVER_IP, SERVER_PORT))
-        print(f"NACK -> pedindo {len(batch)} chunks, 10 primeiros: {batch[:10]}")
+        print(f"NACK | pedindo {len(batch)} chunks | 10 primeiros: {batch[:10]}")
 
         rounds += 1
 
+    sock.close()
+
     if len(chunks) < total_chunks:
-        print(f"[!] Não conseguiu todos os chunks após {rounds} rodadas")
+        print(f"Erro: transferência incompleta após {rounds} rodadas.")
         raise SystemExit(1)
 
     output_dir = Path(__file__).parent / "downloads"
     output_dir.mkdir(exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    name, ext = Path(filename).stem, Path(filename).suffix
-    output_path = output_dir / f"{name}_{timestamp}{ext}"
-
+    output_path = output_dir / filename
 
     save_file(output_path, chunks, total_chunks)
 
     actual_hash = sha256_file(output_path)
     if actual_hash == expected_sha256:
-        print(f" Download concluído: {output_path}")
+        print(f"Download concluído: {output_path}")
     else:
-        print(f"    Hash inválido!")
-        print(f"    Esperado:  {expected_sha256}")
-        print(f"    Obtido:    {actual_hash}")
+        print("Erro: hash final inválido.")
+        print(f"Esperado: {expected_sha256}")
+        print(f"Obtido:   {actual_hash}")
         raise SystemExit(1)
 
 
