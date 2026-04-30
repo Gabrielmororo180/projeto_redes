@@ -1,7 +1,9 @@
 import base64
 import hashlib
 import socket
+from time import sleep
 import zlib
+from datetime import datetime
 from pathlib import Path
 
 SERVER_IP = "127.0.0.1"
@@ -79,6 +81,7 @@ def main():
     sock.settimeout(RECV_TIMEOUT)
 
     req = f"GET /{filename}"
+    sleep(1)
     sock.sendto(req.encode(), (SERVER_IP, SERVER_PORT))
 
     transfer_id, total_chunks, file_size, chunk_size, expected_sha256 = recv_initial_response(sock)
@@ -150,7 +153,7 @@ def main():
         batch = missing[:NACK_BATCH]
         nack_msg = f"NACK|{transfer_id}|{','.join(map(str, batch))}"
         sock.sendto(nack_msg.encode(), (SERVER_IP, SERVER_PORT))
-        print(f"NACK -> pedindo {len(batch)} chunks, exemplo: {batch[:10]}")
+        print(f"NACK -> pedindo {len(batch)} chunks, 10 primeiros: {batch[:10]}")
 
         rounds += 1
 
@@ -160,7 +163,10 @@ def main():
 
     output_dir = Path(__file__).parent / "downloads"
     output_dir.mkdir(exist_ok=True)
-    output_path = output_dir / filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    name, ext = Path(filename).stem, Path(filename).suffix
+    output_path = output_dir / f"{name}_{timestamp}{ext}"
+
 
     save_file(output_path, chunks, total_chunks)
 

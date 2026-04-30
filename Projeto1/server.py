@@ -17,6 +17,8 @@ RETRANS_WINDOW = 10.0
 
 # Lock para sincronizar acesso ao socket UDP
 socket_lock = threading.Lock()
+transfers_lock = threading.Lock()
+transfers = {}
 
 
 def safe_resolve(filename):
@@ -80,47 +82,6 @@ def send_file(sock, client_addr, file_path):
     return transfer_id, total_chunks, chunks
 
 
-def handle_nack(sock, client_addr, transfer_id, total_chunks, chunks):
-    # Aguarda NACKs do cliente por tempo limitado, depois encerra
-    deadline = time.time() + RETRANS_WINDOW
-
-    while time.time() < deadline:
-        try:
-            data, addr = sock.recvfrom(65535)
-        except socket.timeout:
-            continue
-
-        if addr != client_addr:
-            continue
-
-        msg = data.decode(errors="ignore").strip()
-        if not msg.startswith("NACK|"):
-            continue
-
-        parts = msg.split("|", 2)
-        if len(parts) != 3:
-            continue
-
-        _, tid, seq_list = parts
-        if tid != transfer_id:
-            continue
-
-        requested = []
-        for s in seq_list.split(","):
-            if s.isdigit():
-                seq = int(s)
-                if seq in chunks:
-                    requested.append(seq)
-
-        if requested:
-            print(f"[NACK] {client_addr} pediu {requested[:10]}{'...' if len(requested) > 10 else ''}")
-            for seq in requested:
-                send_data(sock, client_addr, transfer_id, seq, total_chunks, chunks[seq])
-
-        send_end(sock, client_addr, transfer_id)
-        deadline = time.time() + RETRANS_WINDOW
-
-
 def handle_client(sock, data, client_addr):
     """Processa requisição de um cliente em thread separada"""
     msg = data.decode(errors="ignore").strip()
@@ -144,7 +105,14 @@ def handle_client(sock, data, client_addr):
         return
 
     transfer_id, total_chunks, chunks = send_file(sock, client_addr, file_path)
-    handle_nack(sock, client_addr, transfer_id, total_chunks, chunks)
+
+    with transfers_lock:
+        transfers[transfer_id] = {
+            "client_addr": client_addr,
+            "total_chunks": total_chunks,
+            "chunks": chunks,
+            "last_activity": time.time(),
+        }
 
 
 def main():
@@ -159,6 +127,54 @@ def main():
 
     while True:
         data, client_addr = sock.recvfrom(65535)
+        msg = data.decode(errors="ignore").strip()
+
+        if msg.startswith("NACK|"):
+            parts = msg.split("|", 2)
+            if len(parts) == 3:
+                _, transfer_id, seq_list = parts
+                with transfers_lock:
+                    transfer = transfers.get(transfer_id)
+
+                if transfer and transfer["client_addr"] == client_addr:
+                    requested = []
+                    for s in seq_list.split(","):
+                        if s.isdigit():
+                            seq = int(s)
+                            if seq in transfer["chunks"]:
+                                requested.append(seq)
+
+                    if requested:
+                        print(
+                            f"[NACK] {client_addr} pediu "
+                            f"{requested[:10]}{'...' if len(requested) > 10 else ''}"
+                        )
+                        for seq in requested:
+                            send_data(
+                                sock,
+                                client_addr,
+                                transfer_id,
+                                seq,
+                                transfer["total_chunks"],
+                                transfer["chunks"][seq],
+                            )
+
+                    send_end(sock, client_addr, transfer_id)
+
+                    with transfers_lock:
+                        transfer["last_activity"] = time.time()
+
+            with transfers_lock:
+                now = time.time()
+                expired = [
+                    tid
+                    for tid, info in transfers.items()
+                    if now - info["last_activity"] > RETRANS_WINDOW
+                ]
+                for tid in expired:
+                    del transfers[tid]
+
+            continue
         
         # Processar cliente em thread separada
         thread = threading.Thread(
