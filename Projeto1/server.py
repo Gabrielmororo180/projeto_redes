@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import socket
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -13,6 +14,9 @@ FILES_DIR = Path(__file__).parent / "files"
 CHUNK_SIZE = 1024
 RETRANS_TIMEOUT = 0.5
 RETRANS_WINDOW = 10.0
+
+# Lock para sincronizar acesso ao socket UDP
+socket_lock = threading.Lock()
 
 
 def safe_resolve(filename):
@@ -41,11 +45,13 @@ def send_data(sock, client_addr, transfer_id, seq, total_chunks, chunk):
     payload_b64 = base64.b64encode(chunk).decode()
     chunk_crc32 = crc32_hex(chunk)
     data_msg = f"DATA|{transfer_id}|{seq}|{total_chunks}|{chunk_crc32}|{payload_b64}"
-    sock.sendto(data_msg.encode(), client_addr)
+    with socket_lock:
+        sock.sendto(data_msg.encode(), client_addr)
 
 
 def send_end(sock, client_addr, transfer_id):
-    sock.sendto(f"END|{transfer_id}".encode(), client_addr)
+    with socket_lock:
+        sock.sendto(f"END|{transfer_id}".encode(), client_addr)
 
 
 def send_file(sock, client_addr, file_path):
@@ -55,7 +61,8 @@ def send_file(sock, client_addr, file_path):
     file_hash = sha256_file(file_path)
 
     ok_msg = f"OK|{transfer_id}|{file_size}|{CHUNK_SIZE}|{total_chunks}|{file_hash}"
-    sock.sendto(ok_msg.encode(), client_addr)
+    with socket_lock:
+        sock.sendto(ok_msg.encode(), client_addr)
 
     chunks = {}
     with open(file_path, "rb") as f:
@@ -74,48 +81,70 @@ def send_file(sock, client_addr, file_path):
 
 
 def handle_nack(sock, client_addr, transfer_id, total_chunks, chunks):
-    previous_timeout = sock.gettimeout()
-    sock.settimeout(RETRANS_TIMEOUT)
+    # Aguarda NACKs do cliente por tempo limitado, depois encerra
     deadline = time.time() + RETRANS_WINDOW
 
-    try:
-        while time.time() < deadline:
-            try:
-                data, addr = sock.recvfrom(65535)
-            except socket.timeout:
-                continue
+    while time.time() < deadline:
+        try:
+            data, addr = sock.recvfrom(65535)
+        except socket.timeout:
+            continue
 
-            if addr != client_addr:
-                continue
+        if addr != client_addr:
+            continue
 
-            msg = data.decode(errors="ignore").strip()
-            if not msg.startswith("NACK|"):
-                continue
+        msg = data.decode(errors="ignore").strip()
+        if not msg.startswith("NACK|"):
+            continue
 
-            parts = msg.split("|", 2)
-            if len(parts) != 3:
-                continue
+        parts = msg.split("|", 2)
+        if len(parts) != 3:
+            continue
 
-            _, tid, seq_list = parts
-            if tid != transfer_id:
-                continue
+        _, tid, seq_list = parts
+        if tid != transfer_id:
+            continue
 
-            requested = []
-            for s in seq_list.split(","):
-                if s.isdigit():
-                    seq = int(s)
-                    if seq in chunks:
-                        requested.append(seq)
+        requested = []
+        for s in seq_list.split(","):
+            if s.isdigit():
+                seq = int(s)
+                if seq in chunks:
+                    requested.append(seq)
 
-            if requested:
-                print(f"[NACK] {client_addr} pediu {requested[:10]}{'...' if len(requested) > 10 else ''}")
-                for seq in requested:
-                    send_data(sock, client_addr, transfer_id, seq, total_chunks, chunks[seq])
+        if requested:
+            print(f"[NACK] {client_addr} pediu {requested[:10]}{'...' if len(requested) > 10 else ''}")
+            for seq in requested:
+                send_data(sock, client_addr, transfer_id, seq, total_chunks, chunks[seq])
 
-            send_end(sock, client_addr, transfer_id)
-            deadline = time.time() + RETRANS_WINDOW
-    finally:
-        sock.settimeout(previous_timeout)
+        send_end(sock, client_addr, transfer_id)
+        deadline = time.time() + RETRANS_WINDOW
+
+
+def handle_client(sock, data, client_addr):
+    """Processa requisição de um cliente em thread separada"""
+    msg = data.decode(errors="ignore").strip()
+    print(f"[REQ] {client_addr} -> {msg}")
+
+    if not msg.startswith("GET /"):
+        with socket_lock:
+            sock.sendto(b"ERR|requisicao_invalida", client_addr)
+        return
+
+    filename = msg[5:].strip()
+    if not filename:
+        with socket_lock:
+            sock.sendto(b"ERR|arquivo_invalido", client_addr)
+        return
+
+    file_path = safe_resolve(filename)
+    if file_path is None or not file_path.exists() or not file_path.is_file():
+        with socket_lock:
+            sock.sendto(b"ERR|arquivo_nao_encontrado", client_addr)
+        return
+
+    transfer_id, total_chunks, chunks = send_file(sock, client_addr, file_path)
+    handle_nack(sock, client_addr, transfer_id, total_chunks, chunks)
 
 
 def main():
@@ -126,28 +155,18 @@ def main():
 
     print(f"Servidor UDP em {SERVER_IP}:{SERVER_PORT}")
     print(f"Diretório de arquivos: {FILES_DIR}")
+    print(f"Processando múltiplos clientes com threads...\n")
 
     while True:
         data, client_addr = sock.recvfrom(65535)
-        msg = data.decode(errors="ignore").strip()
-        print(f"[REQ] {client_addr} -> {msg}")
-
-        if not msg.startswith("GET /"):
-            sock.sendto(b"ERR|requisicao_invalida", client_addr)
-            continue
-
-        filename = msg[5:].strip()
-        if not filename:
-            sock.sendto(b"ERR|arquivo_invalido", client_addr)
-            continue
-
-        file_path = safe_resolve(filename)
-        if file_path is None or not file_path.exists() or not file_path.is_file():
-            sock.sendto(b"ERR|arquivo_nao_encontrado", client_addr)
-            continue
-
-        transfer_id, total_chunks, chunks = send_file(sock, client_addr, file_path)
-        handle_nack(sock, client_addr, transfer_id, total_chunks, chunks)
+        
+        # Processar cliente em thread separada
+        thread = threading.Thread(
+            target=handle_client,
+            args=(sock, data, client_addr)
+        )
+        thread.daemon = True
+        thread.start()
 
 
 if __name__ == "__main__":

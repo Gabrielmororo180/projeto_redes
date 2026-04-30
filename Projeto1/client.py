@@ -122,7 +122,7 @@ def main():
             seq = int(seq_txt)
 
             if seq in drop_once:
-                print("Descartado seq:", seq)
+                print(f"Descartado seq: {seq}")
                 drop_once.remove(seq)
                 continue
 
@@ -148,33 +148,30 @@ def main():
             break
 
         batch = missing[:NACK_BATCH]
+        nack_msg = f"NACK|{transfer_id}|{','.join(map(str, batch))}"
+        sock.sendto(nack_msg.encode(), (SERVER_IP, SERVER_PORT))
         print(f"NACK -> pedindo {len(batch)} chunks, exemplo: {batch[:10]}")
-        nack = f"NACK|{transfer_id}|{','.join(str(x) for x in batch)}"
-        sock.sendto(nack.encode(), (SERVER_IP, SERVER_PORT))
+
         rounds += 1
 
-        if not saw_end and rounds >= MAX_ROUNDS:
-            break
-
-    sock.close()
-
-    missing = [i for i in range(total_chunks) if i not in chunks]
-    if missing:
-        print("Transferência incompleta.")
-        print("Chunks faltando:", missing[:20], "..." if len(missing) > 20 else "")
+    if len(chunks) < total_chunks:
+        print(f"[!] Não conseguiu todos os chunks após {rounds} rodadas")
         raise SystemExit(1)
 
-    out_dir = Path(__file__).parent / "downloads"
-    out_dir.mkdir(exist_ok=True)
-    out_path = out_dir / filename
+    output_dir = Path(__file__).parent / "downloads"
+    output_dir.mkdir(exist_ok=True)
+    output_path = output_dir / filename
 
-    save_file(out_path, chunks, total_chunks)
+    save_file(output_path, chunks, total_chunks)
 
-    got = sha256_file(out_path)
-    print("Arquivo salvo em:", out_path)
-    print("SHA256 esperado :", expected_sha256)
-    print("SHA256 recebido :", got)
-    print("Integridade final:", got == expected_sha256)
+    actual_hash = sha256_file(output_path)
+    if actual_hash == expected_sha256:
+        print(f" Download concluído: {output_path}")
+    else:
+        print(f"    Hash inválido!")
+        print(f"    Esperado:  {expected_sha256}")
+        print(f"    Obtido:    {actual_hash}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
